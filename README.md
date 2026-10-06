@@ -12,6 +12,9 @@ Windows 小工具：**常驻后台，双击桌面空白处隐藏图标，再双�
 - **双击桌面空白处切换**图标显隐；在图标上双击仍然正常打开文件（不会误伤）
 - 常驻后台，**无窗口、无托盘图标**，用完 `--exit` 关闭
 - 可选开机自启；**开机只常驻，不擅自改你的图标状态**
+- **启动自愈**：启动时若发现图标正处于隐藏状态（上一次异常退出留下的残留），
+  会先自动恢复图标再进入常驻——避免"图标藏着、又没人在监听、双击毫无反应"的死局
+- `--status` 一眼看清：版本号 / 图标显隐 / 常驻是否在跑
 - 幂等的命令行接口，方便脚本调用
 - 自带五层自检（`--selftest`），含真实注入点击的端到端测试
 
@@ -22,7 +25,8 @@ hide-desktop.exe                    常驻后台（双击桌面空白处 = 隐�
 hide-desktop.exe --hide             立即隐藏图标后退出
 hide-desktop.exe --show             立即显示图标后退出
 hide-desktop.exe --toggle           立即切换一次后退出
-hide-desktop.exe --status           打印当前图标状态（终端可见）
+hide-desktop.exe --status           查看状态（版本 / 图标显隐 / 常驻是否在跑）
+hide-desktop.exe --version          打印版本号
 hide-desktop.exe --exit             关闭正在运行的常驻实例
 hide-desktop.exe --install-startup  设置开机自启（只常驻，不动图标）
 hide-desktop.exe --uninstall-startup 取消开机自启
@@ -142,6 +146,17 @@ python src/hide_desktop.py --selftest
 - 若桌面被"第三方向 shells 替换"（少数美化工具），图标宿主窗口可能不是 `SysListView32`
 - 双击判定基于"按下沿"，触摸板/触屏的双击手势未验证
 - `--install-startup` 写的是当前用户的 `HKCU\...\Run`
+
+## 版本
+
+当前版本 **v3.1.0**。版本号集中在源码 `__version__`，`--version` / `--status` / 常驻日志都会输出它。
+
+完整改动历史见 [CHANGELOG.md](CHANGELOG.md)。
+
+> ⚠️ **不要混用不同版本的 exe。**
+> 旧版（v1）的"无参数运行 = 切换一次就退出"会让图标被隐藏后**没有任何进程在监听**，
+> 表现就是"双击桌面空白处毫无反应"。v3.1 的**启动自愈**正是为兜住这种状态而加：
+> 只要重新启动一次新版 exe，桌面图标就会自动回来。
 
 ## 许可
 

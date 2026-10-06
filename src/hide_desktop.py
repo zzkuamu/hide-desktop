@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-隐藏桌面 v3 - 常驻后台，双击桌面空白处切换图标显隐
+隐藏桌面 - 常驻后台，双击桌面空白处切换图标显隐
 ==================================================
 用法：
   隐藏桌面.exe                常驻后台（双击桌面空白处=隐藏图标，再双击=显示图标）
   隐藏桌面.exe --hide         立即隐藏图标后退出
   隐藏桌面.exe --show         立即显示图标后退出
   隐藏桌面.exe --toggle       立即切换一次后退出
-  隐藏桌面.exe --status       打印当前图标状态
+  隐藏桌面.exe --status       打印当前状态（版本 / 图标显隐 / 常驻是否在跑）
+  隐藏桌面.exe --version      打印版本号
   隐藏桌面.exe --exit         关闭已运行的常驻实例
   隐藏桌面.exe --install-startup    设置开机自启（开机只常驻，不乱动图标）
   隐藏桌面.exe --uninstall-startup  取消开机自启
@@ -60,8 +61,14 @@ KERNEL32.SetEvent.restype = wintypes.BOOL
 KERNEL32.ResetEvent.argtypes = [wintypes.HANDLE]
 KERNEL32.ResetEvent.restype = wintypes.BOOL
 KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
+KERNEL32.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+KERNEL32.OpenMutexW.restype = wintypes.HANDLE
 
 # ---------------- 常量 ----------------
+# ⚠️ 每次改代码都要同步更新这里 + CHANGELOG.md（--version / --status 会输出它，
+#    用来一眼分辨"现在跑的是哪一版"，避免旧 exe 被误当成新版使用）
+__version__ = "3.1.0"
+
 SW_HIDE = 0
 SW_SHOW = 5
 VK_LBUTTON = 0x01
@@ -348,8 +355,19 @@ def run_resident():
     if exit_event:
         KERNEL32.ResetEvent(exit_event)
     _load_dbl_params()
-    log("resident: polling started (dbl_time=%.3fs, clk=%dx%d)"
-        % (_dbl["time"], _dbl["cx"], _dbl["cy"]))
+    log("resident: start v%s (dbl_time=%.3fs, clk=%dx%d)"
+        % (__version__, _dbl["time"], _dbl["cx"], _dbl["cy"]))
+
+    # ---- 启动自愈（v3.1 新增）----
+    # 若启动时图标是隐藏的，说明这是上一次"异常退出 / 被跑一次就退出的旧版 exe 切过"
+    # 留下的残留状态 —— 此时桌面上没有任何进程在监听，用户双击完全没反应。
+    # 用户主动启动本程序 = 他想用这个功能，所以先把桌面还给他，再进入常驻。
+    # 注意：图标显隐是**运行期状态**，重启后必然为可见，所以开机自启不会触发这里。
+    views = wait_for_listviews(timeout_s=5.0)
+    if views and not current_visible(views):
+        ok = set_icons(views, True)
+        log("resident: icons were HIDDEN at startup -> restored VISIBLE (%s)"
+            % ("ok" if ok else "ASSERT-FAIL"))
 
     was_down = False
     while KERNEL32.WaitForSingleObject(exit_event, 0) != WAIT_OBJECT_0:
@@ -387,12 +405,36 @@ def cmd_toggle():
     return 0 if ok else 1
 
 
+def _resident_running():
+    """是否已有常驻实例在跑（探测命名互斥量；只打开不创建，不会干扰别人）"""
+    h = KERNEL32.OpenMutexW(0x00100000, False, MUTEX_NAME)  # SYNCHRONIZE
+    if h:
+        KERNEL32.CloseHandle(h)
+        return True
+    return False
+
+
+def cmd_version():
+    emit("隐藏桌面 v%s" % __version__)
+    return 0
+
+
 def cmd_status():
     views = find_icon_listviews()
+    running = _resident_running()
     if not views:
-        emit("status: desktop listview NOT FOUND")
+        emit("status: v%s | desktop icon container NOT FOUND" % __version__)
         return 2
-    emit("status: icons %s" % ("VISIBLE" if current_visible(views) else "HIDDEN"))
+    visible = current_visible(views)
+    emit("status: v%s | icons %s | resident %s"
+         % (__version__, "VISIBLE" if visible else "HIDDEN",
+            "RUNNING" if running else "NOT RUNNING"))
+    # 最要命的组合：图标藏着、又没人在监听 —— 此时双击不会有任何反应。
+    # （2026-10-06 用户实际踩到：点了"跑一次就退出"的旧版 exe，图标被藏后无法恢复）
+    if not visible and not running:
+        emit("warn: icons are HIDDEN but no resident instance is running, "
+             "so double-click will NOT respond. Fix: start the exe "
+             "(it restores icons on startup) or run --show.")
     return 0
 
 
@@ -882,19 +924,23 @@ def _selftest_body(views, orig):
     return 0
 
 
-USAGE = """隐藏桌面 - 双击桌面空白处切换图标显隐
+USAGE = """隐藏桌面 v%s - 双击桌面空白处切换图标显隐
 
 用法：
   隐藏桌面.exe                  常驻后台（双击桌面空白处隐藏/显示图标）
   隐藏桌面.exe --hide           立即隐藏图标后退出
   隐藏桌面.exe --show           立即显示图标后退出
   隐藏桌面.exe --toggle         立即切换一次后退出
-  隐藏桌面.exe --status         查看当前图标状态
+  隐藏桌面.exe --status         查看状态（版本 / 图标显隐 / 常驻是否在跑）
+  隐藏桌面.exe --version        打印版本号
   隐藏桌面.exe --exit           关闭正在运行的常驻实例
   隐藏桌面.exe --install-startup    设置开机自启（开机只常驻，不动图标）
   隐藏桌面.exe --uninstall-startup  取消开机自启
   隐藏桌面.exe --selftest       自检（会短暂切换图标，结束自动恢复）
-"""
+
+说明：无参数启动 = 常驻，且不会立刻改你的图标；若启动时发现图标正处于
+      隐藏状态（上次异常退出留下的残留），会先自动恢复图标再进入常驻。
+""" % __version__
 
 
 def main():
@@ -905,6 +951,7 @@ def main():
         "--show": lambda: cmd_set(True),
         "--toggle": cmd_toggle,
         "--status": cmd_status,
+        "--version": cmd_version,
         "--exit": cmd_exit,
         "--install-startup": cmd_install_startup,
         "--uninstall-startup": cmd_uninstall_startup,
