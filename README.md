@@ -183,4 +183,9 @@ python src/hide_desktop.py --selftest
 
 商业使用需联系作者另行取得授权。完整条款见 [LICENSE](LICENSE)。
 
-Copyright (c) 2026 [zzkuamu](https://github.com/zzkuamu)
+```
+Required Notice: Copyright (c) 2026 zzkuamu (https://github.com/zzkuamu)
+```
+
+> 上面这行是 PolyForm 许可证 **Notices 条款**要求随附的版权声明（**不要删**）。
+> 转发、分发本项目时请一并保留它和 `LICENSE` 文件。

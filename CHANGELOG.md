@@ -3,6 +3,21 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)：`主版本.次版本.修订号`。
 版本号在源码 `src/hide_desktop.py` 的 `__version__`，`--version` / `--status` / 日志都会输出它。
 
+## v3.1.2 — 2026-10-06
+
+### 修复
+
+- **修正 LICENSE，让 GitHub 能正确识别许可证**：先前在 PolyForm 官方文本里插入了
+  `Required Notice:` 一行，导致 GitHub 的许可证识别失败 —— 仓库 API 里 `license`
+  返回 `NOASSERTION`、页面侧栏显示 "Other"，别人无法一眼看出这是哪种许可。
+  现已把 LICENSE 恢复为**与 PolyForm 官方原文逐字节一致**（`diff` 验证零差异）；
+  那行版权声明改放到 README 的许可章节 —— PolyForm 的 Notices 条款只要求它
+  **随软件分发**，并不要求写进 LICENSE 正文。
+
+### 未变
+
+- 功能代码无任何改动（版本号同步为 3.1.2 并重新打包 exe）。
+
 ## v3.1.1 — 2026-10-06
 
 ### 变更
