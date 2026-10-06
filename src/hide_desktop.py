@@ -67,7 +67,7 @@ KERNEL32.OpenMutexW.restype = wintypes.HANDLE
 # ---------------- 常量 ----------------
 # ⚠️ 每次改代码都要同步更新这里 + CHANGELOG.md（--version / --status 会输出它，
 #    用来一眼分辨"现在跑的是哪一版"，避免旧 exe 被误当成新版使用）
-__version__ = "3.1.2"
+__version__ = "3.2.0"
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -82,6 +82,7 @@ WAIT_TIMEOUT = 258
 POLL_INTERVAL = 0.01  # 轮询间隔（秒）
 SMTO_ABORTIFHUNG = 0x0002   # 目标线程挂起就立刻返回，不傻等
 SELCOUNT_TIMEOUT_MS = 250   # 单次查询选中数的上限
+SHOWWINDOW_WAIT_S = 0.30    # 等 ShowWindow 生效的上限（实测 0.7ms 就生效，这里只是兜底）
 
 STARTUP_REG = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_NAME = "隐藏桌面"
@@ -180,11 +181,23 @@ def current_visible(views):
 
 
 def set_icons(views, show):
-    """切换可见性，并回读断言真的生效"""
+    """切换可见性，并回读断言真的生效。
+
+    ⚠️ 不要用固定 sleep 等生效。实测 `ShowWindow` 之后约 **0.7ms** 就已经生效，
+    固定 `sleep(0.15)` 是纯粹的浪费 —— 而这个等待发生在**轮询循环内部**：
+    等待期间轮询是"聋"的，用户在这段时间内完成的点击会被整个漏掉
+    （实测：0.215s 的阻塞窗口足以吞掉一次快速连点，表现为"双击时灵时不灵"）。
+    改成"轮询断言、一生效立刻返回"：保留回读校验的严谨性，耗时降到毫秒级。
+    """
     for v in views:
         USER32.ShowWindow(v, SW_SHOW if show else SW_HIDE)
-    time.sleep(0.15)
-    return current_visible(views) == bool(show)
+    target = bool(show)
+    deadline = time.time() + SHOWWINDOW_WAIT_S
+    while time.time() < deadline:
+        if current_visible(views) == target:
+            return True
+        time.sleep(0.002)
+    return current_visible(views) == target
 
 
 def get_selected_count(views):
@@ -257,19 +270,28 @@ def handle_desktop_double_click(x, y, settle=0.06):
     if not views:
         log("dblclick @(%d,%d) ignored: no listview" % (x, y))
         return
-    time.sleep(settle)  # 等资源管理器处理完第一击的选中/清选
+
+    if not current_visible(views):
+        # 图标当前是隐藏的 → 直接显示。
+        # 这条路径**不需要** settle 和选中数查询：图标都藏起来了，不可能"双击到图标"，
+        # 也就没有"放行给资源管理器"这回事。省掉这两步让本路径几乎不阻塞轮询。
+        ok = set_icons(views, True)
+        log("dblclick @(%d,%d) -> icons %s (%s)"
+            % (x, y, "SHOWN" if current_visible(views) else "HIDDEN",
+               "ok" if ok else "ASSERT-FAIL"))
+        return
+
+    # 图标可见：要区分"双击空白"还是"双击图标"，必须等资源管理器处理完第一击的选中状态
+    time.sleep(settle)
     sel = get_selected_count(views)
     if sel < 0:
         # 查询超时（资源管理器忙/卡）→ 不确定就别乱动，避免误藏用户的桌面图标
         log("dblclick @(%d,%d) ignored: selected-count query timed out" % (x, y))
         return
-    if current_visible(views):
-        if sel > 0:
-            log("dblclick @(%d,%d) ignored: icon selected (open file)" % (x, y))
-            return  # 双击的是图标（第一击已选中），放行给资源管理器
-        ok = set_icons(views, False)
-    else:
-        ok = set_icons(views, True)
+    if sel > 0:
+        log("dblclick @(%d,%d) ignored: icon selected (open file)" % (x, y))
+        return  # 双击的是图标（第一击已选中），放行给资源管理器
+    ok = set_icons(views, False)
     log("dblclick @(%d,%d) -> icons %s (%s)"
         % (x, y, "SHOWN" if current_visible(views) else "HIDDEN",
            "ok" if ok else "ASSERT-FAIL"))
@@ -688,6 +710,16 @@ def cmd_selftest():
     所以整个函数体包在 try/finally 里，finally 里无条件恢复。
     （修复前：中途失败会把用户桌面留在"图标全隐藏"的状态，用户还以为系统坏了。）
     """
+    # 常驻实例正在监听全局双击，而自检要**注入真实点击** —— 两边会互相干扰：
+    # 常驻会把自检注入的双击当成"用户双击"再切一次，导致图标被切两次、
+    # 断言自相矛盾，甚至把用户桌面搞乱。
+    # 所以先要求停掉常驻，而不是带着它跑出一堆不可信的结果。
+    if _resident_running():
+        emit("error: a resident instance is running, and it listens for the very "
+             "double-clicks this test injects.\n"
+             "       run `--exit` first, then re-run `--selftest`.")
+        return 3
+
     try:
         os.remove(LOG_PATH)
     except OSError:
@@ -831,15 +863,34 @@ def _selftest_real_selection(views, orig, blank):
 
 def _selftest_body(views, orig):
     # --- 第 1 层：显隐切换断言 ---
-    if not set_icons(views, False):
-        log("FAIL: hide did not take effect")
+    # ⚠️ 这里**不能只信 set_icons 的返回值** —— 它内部自己会做回读断言，
+    # 可一旦那个断言被破坏（例如被改成恒返回 True / 干脆不干活也说成功），
+    # 自检就变成"自己给自己打分"，永远发现不了问题。
+    # 所以这里独立回读一次**真实状态**，作为对 set_icons 的交叉验证。
+    set_icons(views, False)
+    if current_visible(views):
+        log("FAIL: hide did not take effect (icons still visible)")
         return 1
     log("PASS: hide -> icons HIDDEN")
 
-    if not set_icons(views, True):
-        log("FAIL: show did not take effect")
+    set_icons(views, True)
+    if not current_visible(views):
+        log("FAIL: show did not take effect (icons still hidden)")
         return 1
     log("PASS: show -> icons VISIBLE")
+
+    # --- 第 1.5 层：接口自检（不依赖桌面环境，任何情况都能跑） ---
+    # 验证"读选中数"这条路径**真的在跟系统对话**，而不是安静地自说自话。
+    # 办法：给它一个无效句柄，它必须报告失败（返回 -1）。
+    # 为什么必须查这个：这个函数一旦被破坏成"恒返回 0"（例如回读逻辑写挂），
+    # 图标守卫会彻底失效 —— 双击图标也会被当成"点在空白"，把用户桌面误藏。
+    # 用无效句柄的好处是完全不依赖桌面是否有裸露区域，任何环境都能跑，
+    # 也补上了"图标守卫用例全用替身值、从没验证过真实读取"这个覆盖漏洞。
+    if get_selected_count([0]) != -1:
+        log("FAIL: get_selected_count accepted an invalid handle without reporting "
+            "failure -> selected-count reading is broken")
+        return 1
+    log("PASS: selected-count query reports failure for an invalid handle")
 
     # --- 第 2 层：双击判定阈值（用产品真实阈值，不是另抄一份） ---
     _load_dbl_params()          # 确保 _dbl 是当前系统值
