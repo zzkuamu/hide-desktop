@@ -67,7 +67,7 @@ KERNEL32.OpenMutexW.restype = wintypes.HANDLE
 # ---------------- 常量 ----------------
 # ⚠️ 每次改代码都要同步更新这里 + CHANGELOG.md（--version / --status 会输出它，
 #    用来一眼分辨"现在跑的是哪一版"，避免旧 exe 被误当成新版使用）
-__version__ = "3.1.0"
+__version__ = "3.1.1"
 
 SW_HIDE = 0
 SW_SHOW = 5
